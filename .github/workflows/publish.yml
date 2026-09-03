@@ -1,20 +1,39 @@
 name: Publish
+
 on:
   release:
     types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-php-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: '8.2'
           extensions: curl, json
-      - run: composer validate --strict
+          coverage: none
+
+      - name: Verify tag format
+        run: |
+          if [[ ! "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: tag ${{ github.ref_name }} is not semver (vX.Y.Z)"
+            exit 1
+          fi
+
+      - run: composer validate
       - run: find src -name '*.php' | xargs php -l
-      - name: Notify Packagist
-        # Packagist webhook is already configured via GitHub webhook on this repo.
-        # This step just confirms the release is valid before Packagist auto-updates.
-        run: echo "Release ${{ github.event.release.tag_name }} validated — Packagist webhook will auto-update."
+
+      # Packagist is updated automatically via the GitHub webhook configured on this repo.
+      - name: Confirm Packagist update
+        run: echo "Release ${{ github.ref_name }} validated. Packagist webhook will auto-update wi-api/php."
