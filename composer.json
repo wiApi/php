@@ -3,8 +3,13 @@
   "description": "Official PHP SDK for the wi-api WhatsApp platform",
   "type": "library",
   "license": "MIT",
-  "homepage": "https://docs.wi.api.br",
-  "keywords": ["whatsapp", "api", "sdk", "messaging"],
+  "homepage": "https://packagist.org/packages/wi-api/php",
+  "keywords": [
+    "whatsapp",
+    "api",
+    "sdk",
+    "messaging"
+  ],
   "authors": [
     {
       "name": "wi-api",
@@ -31,5 +36,14 @@
   },
   "config": {
     "sort-packages": true
+  },
+  "source": {
+    "type": "git",
+    "url": "https://github.com/wiApi/php",
+    "reference": "main"
+  },
+  "support": {
+    "issues": "https://github.com/wiApi/php/issues",
+    "source": "https://github.com/wiApi/php"
   }
 }
