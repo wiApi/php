@@ -3,9 +3,12 @@ name: Publish
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: publish-php-${{ github.ref }}
@@ -34,6 +37,5 @@ jobs:
       - run: composer validate
       - run: find src -name '*.php' | xargs php -l
 
-      # Packagist is updated automatically via the GitHub webhook configured on this repo.
       - name: Confirm Packagist update
         run: echo "Release ${{ github.ref_name }} validated. Packagist webhook will auto-update wi-api/php."
