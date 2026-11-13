@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-13
+
+### Fixed
+- The package no longer ships `vendor/` (PHPUnit and other dev dependencies) nor the tests and CI files. Version 0.2.0 on Packagist carried them by mistake; its code is the same, so upgrade to 0.2.1 for a clean install
+
 ## [0.2.0] - 2026-11-13
 
 ### Added
