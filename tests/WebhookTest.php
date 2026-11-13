@@ -79,6 +79,16 @@ class WebhookTest extends TestCase
         $this->assertSame('sess-1', $event['session_id']);
     }
 
+    public function testParseEventKeepsTheSessionMetadata(): void
+    {
+        $event = Webhook::parseEvent(
+            '{"event":"connected","session_id":"s","session_metadata":{"purpose":"briefing"},"data":{},"timestamp":"t"}'
+        );
+        $this->assertSame(['purpose' => 'briefing'], $event['session_metadata']);
+        // A server older than the field does not send it: read it with a default.
+        $this->assertSame([], Webhook::parseEvent(self::PAYLOAD)['session_metadata'] ?? []);
+    }
+
     public function testParseEventThrowsWiExceptionOnInvalidJson(): void
     {
         $this->expectException(WiException::class);
@@ -138,5 +148,114 @@ class WebhookTest extends TestCase
     {
         $this->expectException(WiException::class);
         Webhook::verify(self::PAYLOAD, '', self::SECRET);
+    }
+
+    // ─── verifyWebhook (v2: signed timestamp) ─────────────────────────────────
+
+    private const NOW = 1_800_000_000;
+
+    private function makeSignatureV2(string $payload, string $secret, int $ts): string
+    {
+        return sprintf('t=%d,v1=%s', $ts, hash_hmac('sha256', $ts . '.' . $payload, $secret));
+    }
+
+    public function testVerifyWebhookAcceptsFreshV2(): void
+    {
+        $h = ['X-WI-Signature-V2' => $this->makeSignatureV2(self::PAYLOAD, self::SECRET, self::NOW)];
+        $this->assertTrue(Webhook::verifyWebhook(self::PAYLOAD, $h, self::SECRET, 300, self::NOW + 299));
+    }
+
+    public function testVerifyWebhookRejectsReplayOutsideTolerance(): void
+    {
+        $h = ['x-wi-signature-v2' => $this->makeSignatureV2(self::PAYLOAD, self::SECRET, self::NOW)];
+        $this->assertFalse(Webhook::verifyWebhook(self::PAYLOAD, $h, self::SECRET, 300, self::NOW + 301));
+        $this->assertFalse(Webhook::verifyWebhook(self::PAYLOAD, $h, self::SECRET, 300, self::NOW - 301));
+        $this->assertFalse(Webhook::verifyWebhook(self::PAYLOAD, $h, self::SECRET, 30, self::NOW + 60));
+        $this->assertTrue(Webhook::verifyWebhook(self::PAYLOAD, $h, self::SECRET, 120, self::NOW + 60));
+    }
+
+    public function testVerifyWebhookRejectsTamperedTimestampBodyAndSecret(): void
+    {
+        $sig = $this->makeSignatureV2(self::PAYLOAD, self::SECRET, self::NOW);
+        $v1 = explode(',', $sig)[1];
+        $this->assertFalse(Webhook::verifyWebhook(
+            self::PAYLOAD,
+            ['x-wi-signature-v2' => 't=' . (self::NOW + 1) . ',' . $v1],
+            self::SECRET,
+            300,
+            self::NOW,
+        ));
+        $this->assertFalse(Webhook::verifyWebhook('tampered', ['x-wi-signature-v2' => $sig], self::SECRET, 300, self::NOW));
+        $this->assertFalse(Webhook::verifyWebhook(self::PAYLOAD, ['x-wi-signature-v2' => $sig], 'wrong', 300, self::NOW));
+    }
+
+    public function testVerifyWebhookMalformedV2NeverFallsBackToLegacy(): void
+    {
+        $legacy = $this->makeSignature(self::PAYLOAD, self::SECRET);
+        foreach (['', 'garbage', 't=abc,v1=00', 't=' . self::NOW, 'v1=00'] as $v2) {
+            $this->assertFalse(Webhook::verifyWebhook(
+                self::PAYLOAD,
+                ['x-wi-signature-v2' => $v2, 'x-wi-signature' => $legacy],
+                self::SECRET,
+                300,
+                self::NOW,
+            ));
+        }
+    }
+
+    public function testVerifyWebhookFallsBackToLegacyWhenNoV2Header(): void
+    {
+        $legacy = $this->makeSignature(self::PAYLOAD, self::SECRET);
+        $this->assertTrue(Webhook::verifyWebhook(self::PAYLOAD, ['x-wi-signature' => $legacy], self::SECRET));
+        $this->assertFalse(Webhook::verifyWebhook(self::PAYLOAD, [], self::SECRET));
+    }
+
+    public function testVerifyDeliveryReturnsEventOrThrows401(): void
+    {
+        $now = time();
+        $h = ['x-wi-signature-v2' => $this->makeSignatureV2(self::PAYLOAD, self::SECRET, $now)];
+        $this->assertSame('message', Webhook::verifyDelivery(self::PAYLOAD, $h, self::SECRET)['event']);
+
+        $stale = ['x-wi-signature-v2' => $this->makeSignatureV2(self::PAYLOAD, self::SECRET, $now - 3600)];
+        try {
+            Webhook::verifyDelivery(self::PAYLOAD, $stale, self::SECRET);
+            $this->fail('expected WiException');
+        } catch (WiException $e) {
+            $this->assertSame(401, $e->statusCode);
+        }
+    }
+
+    // ─── receipt ──────────────────────────────────────────────────────────────
+
+    public function testParseEventReceiptPayloads(): void
+    {
+        $cases = [
+            'delivered' => ['', 'delivered', ['A', 'B']],
+            'read' => ['read', 'read', ['A']],
+            'played' => ['played', 'played', ['C']],
+        ];
+        foreach ($cases as $name => [$raw, $status, $ids]) {
+            $body = json_encode([
+                'event' => 'receipt',
+                'session_id' => 'sess-1',
+                'data' => [
+                    'type' => $raw,
+                    'rawType' => $raw,
+                    'status' => $status,
+                    'chat' => '5511998765432@s.whatsapp.net',
+                    'sender' => '5511998765432@s.whatsapp.net',
+                    'messageIds' => $ids,
+                    'timestamp' => 1748790003,
+                    'isFromMe' => false,
+                    'messageFromMe' => true,
+                ],
+                'timestamp' => '2026-06-01T15:00:03.000Z',
+            ], JSON_THROW_ON_ERROR);
+            $event = Webhook::parseEvent($body);
+            $this->assertSame('receipt', $event['event'], $name);
+            $this->assertSame($status, $event['data']['status'], $name);
+            $this->assertSame($ids, $event['data']['messageIds'], $name);
+            $this->assertSame($event['data']['type'], $event['data']['rawType'], $name);
+        }
     }
 }

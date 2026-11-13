@@ -18,12 +18,23 @@ class WiException extends \RuntimeException
     public static function fromResponse(int $statusCode, string $body): self
     {
         $data = json_decode($body, true);
-        $message = is_array($data) && isset($data['message'])
-            ? (string) $data['message']
-            : "HTTP {$statusCode}";
-        $errorCode = is_array($data) && isset($data['error'])
-            ? (string) $data['error']
-            : '';
+        $message = "HTTP {$statusCode}";
+        $errorCode = '';
+        if (is_array($data)) {
+            // Current shape: {"error":{"code","message"}}; legacy flat shape still read.
+            if (isset($data['error']) && is_array($data['error'])) {
+                $message = isset($data['error']['message']) ? (string) $data['error']['message'] : $message;
+                $errorCode = isset($data['error']['code']) ? (string) $data['error']['code'] : '';
+            } else {
+                // Legacy flat shape: `message` is the text, `error` the code.
+                if (isset($data['message'])) {
+                    $message = (string) $data['message'];
+                }
+                $errorCode = isset($data['error'])
+                    ? (string) $data['error']
+                    : (isset($data['code']) ? (string) $data['code'] : '');
+            }
+        }
 
         return new self($message, $statusCode, $errorCode);
     }

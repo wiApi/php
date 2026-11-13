@@ -84,6 +84,15 @@ class WiExceptionTest extends TestCase
         $this->assertSame('', $e->errorCode);
     }
 
+    public function testFromResponseReadsNestedErrorShape(): void
+    {
+        $body = json_encode(['error' => ['code' => 'key_forbidden', 'message' => 'read-only']]);
+        $e = WiException::fromResponse(403, $body);
+        $this->assertSame('read-only', $e->getMessage());
+        $this->assertSame('key_forbidden', $e->errorCode);
+        $this->assertSame(403, $e->statusCode);
+    }
+
     public function testFromResponseHandlesEmptyBody(): void
     {
         $e = WiException::fromResponse(503, '');

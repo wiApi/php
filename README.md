@@ -99,13 +99,13 @@ use WiApi\Webhook;
 use WiApi\Exception\WiException;
 
 $body = file_get_contents('php://input');
-$sig  = $_SERVER['HTTP_X_WI_SIGNATURE'] ?? '';
 
 try {
-    $event = Webhook::verify(
-        body:      $body,
-        signature: $sig,
-        secret:    $_ENV['WI_WEBHOOK_SECRET'],
+    // x-wi-signature-v2 (HMAC of "<timestamp>.<body>"), 5 minute replay tolerance.
+    $event = Webhook::verifyDelivery(
+        rawBody: $body,
+        headers: getallheaders(),
+        secret:  $_ENV['WI_WEBHOOK_SECRET'],
     );
 
     match ($event['event']) {
@@ -116,7 +116,37 @@ try {
 
     http_response_code(204);
 } catch (WiException $e) {
-    http_response_code($e->getStatusCode() ?: 400);
+    http_response_code($e->statusCode ?: 400);
+}
+```
+
+`disconnected` carries `willReconnect` on every delivery, so you never need to know each `reason`:
+
+```php
+use WiApi\Disconnected;
+
+if ($event['event'] === 'disconnected') {
+    $d = Disconnected::fromEvent($event);
+    if (!$d->willReconnect) {
+        // offline until you act: $d->resume is "connect" or "resume"
+        alertOwner($event['session_id'], $d->reason);
+    }
+    // an unknown reason ($d->isKnownReason() === false) follows willReconnect too
+}
+```
+
+`pairing.failed` says how a pairing attempt ended without linking the number (`method` is `qr` or `code`):
+
+```php
+use WiApi\PairingFailed;
+use WiApi\PairingFailureReason;
+
+if ($event['event'] === 'pairing.failed') {
+    $p = PairingFailed::fromEvent($event);
+    if ($p->reason === PairingFailureReason::TIMEOUT) {
+        // nobody read the QR or typed the code in time: call connect again
+    }
+    // an unknown reason ($p->isKnownReason() === false) is handled like "error"
 }
 ```
 
@@ -125,10 +155,10 @@ Laravel:
 ```php
 Route::post('/webhook', function (Request $request) {
     try {
-        $event = Webhook::verify(
-            body:      $request->getContent(),
-            signature: $request->header('x-wi-signature', ''),
-            secret:    config('services.wiapi.webhook_secret'),
+        $event = Webhook::verifyDelivery(
+            rawBody: $request->getContent(),
+            headers: $request->headers->all(),
+            secret:  config('services.wiapi.webhook_secret'),
         );
     } catch (WiException) {
         abort(401);
